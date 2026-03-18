@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.R
+
+# Output folders
+input_data/
+output_data/
+environments/
+scrna_seq_seurat_multiple_processing_pipelines_cache/
+scrna_seq_seurat_multiple_processing_pipelines_files/

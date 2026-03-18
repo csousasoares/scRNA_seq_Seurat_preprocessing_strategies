@@ -1,0 +1,253 @@
+---
+title: "Seurat Processing Training"
+author: "Carlos Sousa Soares"
+editor: visual
+theme: 
+  dark: darkly ## Dark theme
+format:
+  html:
+    toc: true ## Adds table of contents.
+    code-fold: true ## Puts code in a foldable tab.
+    css: styles.css ## This css file need to be in the same folder as this .qmd document. Justifies blocks of text.
+execute: 
+   cache: true ## Stores executed outputs in cache.
+   message: false ## If done here, supresses messages in every chunk.
+   warning: false ## If done here, supresses messages in every chunk.
+   fig-width: 6 ## Sets figures at width of 6''
+   fig-asp: 0.618 ## Sets aspects ratio as the golden ratio. In individual chunks, only adjust fig-asp (if needed).
+knitr:
+  opts_chunk:
+    comment: "#>" ## code output will always appear after those characters.
+    collapse: false ## code output will always appears collapsed together with code.
+    fig.align: center ## Aligns images to the center. Always under knitr.
+## Don't forget: duplicated chunk labels will return an error.
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Introduction
+
+This is a documented version of my attempt to process scRNA-seq from (almost) raw data. I will be using the PBMC 10k dataset available from 10x genomics (see 10k_Human_PBMC_5p_v3_Ultima).
+
+## Create Seurat object from CellRanger Output
+
+In standard pipelines, the genomics facility will use CellRanger to perform quality control and align the FASTQ files to a genome of reference. This is a time and resource-consuming process but, since it's very standard and reproducible, it's often performed at the facility level. The main output of the CellRanger software is a set of Feature_BC_Matrix objects per sample, usually under the .h5 extension. This creates a sparse matrix that can be loaded directly into Seurat:
+
+```{r}
+
+## Load Object from H5
+
+library(Seurat)
+
+set.seed(123)
+
+h5_bc_matrix <- Read10X_h5("input_data\\10k_Human_PBMC_5p_v3_Ultima_10k_Human_PBMC_5p_v3_Ultima_count_sample_filtered_feature_bc_matrix.h5")
+
+
+pbmc_10k <- CreateSeuratObject(
+  h5_bc_matrix,
+  assay = "RNA",
+  project = "pbmc_10k"
+)
+```
+
+We can check that the features (genes) and cells (barcodes) were correctly assigned:
+
+```{r}
+
+head(rownames(pbmc_10k), 20)
+
+head(colnames(pbmc_10k), 20)
+```
+
+## Quality Control
+
+A common step at this stage is quality control of the samples. This is usually done by evaluating the number of features or counts per cell, as well as the percentage of mitochondrial reads.
+
+plot1 \<- FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+plot2 \<- FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+plot1 + plot2
+
+FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+pbmc \<- subset(pbmc_10k, subset = nFeature_RNA \> 500 & nFeature_RNA \< 6000 & percent.mt \< 5)
+
+pbmc
+
+```{r}
+
+pbmc_10k[["percent.mt"]] <- PercentageFeatureSet(pbmc_10k, pattern = "^MT-")
+
+# Visualize QC metrics as a violin plot:
+
+VlnPlot(pbmc_10k, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3)
+
+```
+
+A few cells show high mitochondrial content, which is probably because of apoptosis during the protocol. Interestingly, features and counts appear bimodal, with a second population which has roughly twice as many features/counts. We can also do a FeatureScatter plot analysis to see their correlation:
+
+```{r}
+
+plot1 <- FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+FeatureScatter(pbmc_10k, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+The high number of features may indicate doublets, but may also just indicate a second population that is more metabolically active. For now, I will just everything above that, as well as cells having more than 5% mitochondrial counts.
+
+```{r}
+
+pbmc <- subset(pbmc_10k, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 & percent.mt < 5)
+
+VlnPlot(pbmc, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3)
+```
+
+## Normalization and Scaling of Gene Expression
+
+The relative abundance of a gene in a cell depends on the amount of RNA that was able to be sequenced. An extremely important step is, therefore, to normalize gene expression to sequencing depth or using other algorithms. An often used approach is to use the NormalizeData from Seurat:
+
+```{r}
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+Next, I performed the identification of highly variable features, which is often necessary for downstream analysis such as PCA:
+
+```{r cache=TRUE, cache.lazy=FALSE}
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(pbmc), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1
+plot2
+```
+
+Next, I applied a linear transformation (‘scaling’) that is a standard pre-processing step prior to dimensional reduction techniques like PCA:
+
+```{r cache=TRUE, cache.lazy=FALSE}
+
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+
+# Examine and visualize PCA results a few different ways
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+```
+
+We can check the PCA plot:
+
+```{r}
+
+DimPlot(pbmc, reduction = "pca") + NoLegend()
+```
+
+## Create an UMAP Plot (Clustering)
+
+We can do an Elbow Plot, which is useful to chose how many dimensions we will use to make the UMAPs:
+
+```{r}
+
+ElbowPlot(pbmc)
+```
+
+I opted to use the first eight dimensions, which I think is already past the imaginary "elbow":
+
+```{r cache=TRUE, cache.lazy=FALSE}
+
+pbmc <- FindNeighbors(pbmc, dims = 1:8)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+
+# Look at cluster IDs of the first 5 cells
+head(Idents(pbmc), 5)
+
+pbmc <- RunUMAP(pbmc, dims = 1:8)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+Idents(pbmc) <- "seurat_clusters"
+
+d1 <- DimPlot(pbmc, reduction = "umap",
+              label = T)
+d1
+```
+
+Using FeaturePlot, we can check the expression of some well known marker genes for different immune cell types:
+
+```{r}
+
+f1 <- FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "TRB", "CD4", "PPBP","CD8A"))
+
+library(patchwork)
+library(tidyverse)
+
+d1
+f1
+```
+
+## Cell Type Annotation (Manual)
+
+I tried to do a simple cell type annotation based on well known markers of immune cell types. First I obtained the cluster metadata for each cell:
+
+```{r}
+
+sc <- pbmc@meta.data$seurat_clusters %>% as.data.frame() %>% setNames("cluster") ## Gets the cluster for each cell
+
+row.names(sc) <- colnames(pbmc) 
+
+head(sc)
+```
+
+I manually annotated the cell type for each cluster, based on the UMAP plots I created above. This is often easier if your clusters are very distinguishable and you very well the biology of your cells of interest:
+
+```{r cache=TRUE, cache.lazy=FALSE}
+
+cell_types <- data.frame(
+  "cell_type" = c("T-Cell",
+                  "T-Cell",
+                  "Monocyte",
+                  "NK Cell",
+                  "T-Cell",
+                  "B-Cell",
+                  "Monocyte", 
+                  "T-Cell", 
+                  "T-Cell",
+                  "T-Cell",
+                  "DCs",
+                  "None",
+                  "None",
+                  "Platelet",
+                  "None"),
+  "cluster" = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                11, 12, 13, 14)
+)
+
+cell_types$cluster <- as.factor(cell_types$cluster) ## Because clusters are factors, not integers.
+
+sc <- sc %>% 
+  dplyr::left_join(cell_types, join_by(cluster)) ## Join info together
+
+pbmc[["cell_type"]] <- sc$cell_type
+
+Idents(pbmc) <- "cell_type"
+
+pbmc_improved <- subset(pbmc, subset = cell_type != "None")
+
+DimPlot(pbmc_improved,
+        label = T)
+```
