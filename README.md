@@ -1,1 +1,1 @@
-Report visualization: https://htmlpreview.github.io/?https://github.com/csousasoares/scRNA_seq_Seurat_preprocessing_strategies/blob/main/scrna_seq_seurat_multiple_processing_pipelines.html
+Repo for basic data preprocessing, scaling, filtering and cell type annotation from CellRanger output using Seurat. Report visualization: https://htmlpreview.github.io/?https://github.com/csousasoares/scRNA_seq_Seurat_preprocessing_strategies/blob/main/scrna_seq_seurat_multiple_processing_pipelines.html
